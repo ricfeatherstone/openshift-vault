@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: SecurityContextConstraints
+metadata:
+  annotations:
+    kubernetes.io/description: vault scc extends the restricted scc to provide features
+      required to run Vault.
+  name: vault
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegedContainer: false
+allowedCapabilities:
+- IPC_LOCK
+allowedFlexVolumes: []
+defaultAddCapabilities: []
+fsGroup:
+  type: MustRunAs
+  ranges:
+  - max: 1000
+    min: 1000
+priority: null
+readOnlyRootFilesystem: true
+requiredDropCapabilities:
+- KILL
+- MKNOD
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: MustRunAs
+supplementalGroups:
+  type: RunAsAny
+volumes:
+- configMap
+- persistentVolumeClaim
+- secret

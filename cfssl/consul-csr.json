@@ -1,0 +1,20 @@
+{
+  "CN": "server.dc1.consul",
+  "hosts": [
+    "server.dc1.consul",
+    "127.0.0.1"
+  ],
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "GB",
+      "ST": "Norfolk",
+      "L": "Norwich",
+      "O": "RicFeatherstone",
+      "OU": "Consul"
+    }
+  ]
+}

@@ -1,0 +1,145 @@
+apiVersion: v1
+kind: DeploymentConfig
+metadata:
+  name: vault
+  labels:
+    name: vault
+    app: vault
+spec:
+  replicas: 2
+  selector:
+    app: vault
+    deploymentconfig: vault
+  test: false
+  triggers:
+  - type: ConfigChange
+  strategy:
+    type: Rolling
+    activeDeadlineSeconds: 21600
+    resources: {}
+    rollingParams:
+      intervalSeconds: 1
+      maxSurge: 25%
+      maxUnavailable: 25%
+      timeoutSeconds: 600
+      updatePeriodSeconds: 1
+  template:
+    metadata:
+      labels:
+        app: vault
+        deploymentconfig: vault
+    spec:
+      securityContext:
+        fsGroup: 1000
+      serviceAccountName: vault
+      affinity:
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  name: consul
+            weight: 100
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  name: vault
+            weight: 100
+      containers:
+        - name: consul-client
+          image: "consul:0.9.1"
+          env:
+          - name: POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: GOSSIP_ENCRYPTION_KEY
+            valueFrom:
+              secretKeyRef:
+                name: consul
+                key: gossip-encryption-key
+          - name: NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          args:
+          - "agent"
+          - "-server=false"
+          - "-bind=0.0.0.0"
+          - "-advertise=$(POD_IP)"
+          - "-client=127.0.0.1"
+          - "-retry-join=consul.$(NAMESPACE).svc.cluster.local"
+          - "-config-file=/consul/config/client.json"
+          - "-encrypt=$(GOSSIP_ENCRYPTION_KEY)"
+          - "-data-dir=/consul/data"
+          - "-disable-host-node-id"
+          volumeMounts:
+          - name: consul-config
+            mountPath: /consul/config
+          - name: consul-cert
+            mountPath: /var/run/secrets/consul/certs
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                - /bin/sh
+                - -c
+                - consul leave
+          ports:
+          - containerPort: 8301
+            name: serf-lan
+          - containerPort: 8443
+            name: http-api
+        - name: vault
+          image: "vault"
+#          env:
+#          - name: VAULT_LOCAL_CONFIG
+#            valueFrom:
+#              configMapKeyRef:
+#                name: vault
+#                key: vault-server.hcl
+          securityContext:
+            capabilities:
+              add:
+              - IPC_LOCK
+          command:
+          - vault
+          - server
+          - "-config"
+          - /vault/config
+          volumeMounts:
+          - name: consul-cert
+            mountPath: /var/run/secrets/consul/certs
+          - name: vault-config
+            mountPath: /vault/config
+          - name: vault-cert
+            mountPath: /var/run/secrets/vault/certs
+          ports:
+          - containerPort: 8200
+            name: https
+          livenessProbe:
+            httpGet:
+              path: 'v1/sys/health?standbyok=true&standbycode=200&sealedcode=200&uninitcode=200'
+              port: 8200
+              scheme: HTTPS
+#          readinessProbe:
+#            httpGet:
+#              path: /v1/sys/health
+#              port: 8200
+      volumes:
+      - name: consul-config
+        configMap:
+          name: consul-client
+      - name: consul-cert
+        secret:
+          secretName: consul-client
+      - name: vault-config
+        configMap:
+          name: vault
+      - name: vault-cert
+        secret:
+          secretName: vault-cert

@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: consul
+  labels:
+    name: consul
+    app: vault
+spec:
+  clusterIP: None
+  ports:
+  - name: server-rpc
+    port: 8300
+    targetPort: 8300
+  - name: serflan-tcp
+    protocol: "TCP"
+    port: 8301
+    targetPort: 8301
+  - name: serflan-udp
+    protocol: "UDP"
+    port: 8301
+    targetPort: 8301
+  - name: serfwan-tcp
+    protocol: "TCP"
+    port: 8302
+    targetPort: 8302
+  - name: serfwan-udp
+    protocol: "UDP"
+    port: 8302
+    targetPort: 8302
+  - name: https-api
+    port: 8443
+    targetPort: 8443
+  selector:
+    name: consul
+    app: vault

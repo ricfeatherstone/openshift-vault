@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Route
+metadata:
+  name: vault
+  labels:
+    app: vault
+spec:
+  host: vault.apps.127.0.0.1.nip.io
+  port:
+    targetPort: https
+  tls:
+    termination: reencrypt
+  to:
+    kind: Service
+    name: vault
+    weight: 100
+  wildcardPolicy: None
