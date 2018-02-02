@@ -1,0 +1,234 @@
+def BASE_IMAGE = 'centos'
+def CONSUL = 'consul'
+def VAULT = 'vault'
+def CONSUL_VERSION = '1.0.3'
+def VAULT_VERSION = '0.9.1'
+def DUMB_INIT_VERSION = '1.2.1'
+def appName = 'vault'
+
+def currentConsulImage, currentConsulBuildNo
+def currentVaultImage, currentVaultBuildNo
+
+def utils = load('utils.groovy')
+
+ node() {
+    stage('Clean Checkout') {
+        deleteDir()
+        checkout scm
+    }
+
+    stage('Create / Update Static Resources') {
+        for(project in ['vault-sandpit', 'vault']) {
+            openshift.withCluster() {
+                openshift.withProject(project) {
+                    createOrReplace('sa', CONSUL, 'openshift/resources/consul/sa.yml')
+                    createOrReplace('configmap', CONSUL, 'openshift/resources/consul/configmap.yml')
+                    createOrReplace('svc', CONSUL, 'openshift/resources/consul/svc.yml')
+                }
+            }
+        }
+    }
+
+    stage('Prepare') {
+        parallel (
+            'TLS Certs' : {
+                dir('ca') {
+    sh 'curl -sSL -o cfssl https://pkg.cfssl.org/R1.2/cfssl_linux-amd64'
+    sh 'curl -sSL -o cfssljson https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64'
+    sh 'chmod +x cfssl cfssljson'
+
+    sh './cfssl gencert -initca ../cfssl/ca-csr.json | ./cfssljson -bare ca'
+
+    sh '''./cfssl gencert \
+      -ca=ca.pem \
+      -ca-key=ca-key.pem \
+      -config=../cfssl/ca-config.json \
+      -profile=default \
+      ../cfssl/consul-csr.json | ./cfssljson -bare consul
+'''
+
+    sh '''./cfssl gencert \
+      -ca=ca.pem \
+      -ca-key=ca-key.pem \
+      -config=../cfssl/ca-config.json \
+      -profile=default \
+      ../cfssl/consul-client-csr.json | ./cfssljson -bare consul-client
+
+'''
+
+    sh 'ls -las'
+
+}
+            },
+            'Consul Build Dir' : {
+                dir('build/consul') {
+                    utils.download("https://github.com/Yelp/dumb-init/releases/download/v${DUMB_INIT_VERSION}/dumb-init_${DUMB_INIT_VERSION}_amd64", 'dumb-init')
+                    sh 'chmod +x dumb-init'
+
+                    download("https://releases.hashicorp.com/consul/${CONSUL_VERSION}/consul_${CONSUL_VERSION}_linux_amd64.zip", 'consul.zip')
+                    sh 'unzip consul.zip && rm consul.zip'
+
+                    writeFile(file: 'Dockerfile', text: consulDockerfile(BASE_IMAGE, CONSUL_VERSION, DUMB_INIT_VERSION))
+                }
+            },
+            'Vault Build Dir' : {
+                dir('build/vault') {
+                    download("https://github.com/Yelp/dumb-init/releases/download/v${DUMB_INIT_VERSION}/dumb-init_${DUMB_INIT_VERSION}_amd64", 'dumb-init')
+                    sh 'chmod +x dumb-init'
+
+                    download("https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip", 'vault.zip')
+                    sh 'unzip vault.zip && rm vault.zip'
+
+                    writeFile(file: 'Dockerfile', text: vaultDockerfile(BASE_IMAGE, VAULT_VERSION, DUMB_INIT_VERSION))
+                }
+            }
+        )
+    }
+
+    stage('Build Images') {
+        parallel (
+            'Consul' : {
+                def build
+                openshift.withCluster() {
+                    if(!openshift.selector('bc', CONSUL).exists()) {
+                        openshift.newBuild("--name=${CONSUL}",
+                            '--binary=true',
+                            "--labels=app=${appName}")
+                    }
+
+                    dir('build/consul') {
+                        build = openshift.startBuild(CONSUL,
+                            '--from-dir="."',
+                            '--wait=true').narrow('build').object()
+                     }
+                }
+
+                def namespace = build.status.config.namespace
+                def imageDigest = build.status.output.to.imageDigest
+                currentConsulBuildNo = "${build.metadata.annotations.get('openshift.io/build.number')}"
+
+                currentConsulImage = "${namespace}/${CONSUL}@${imageDigest}"
+
+                echo "Build #${currentConsulBuildNo} created ${currentConsulImage}"
+            },
+            'Vault' : {
+                def build
+
+                openshift.withCluster() {
+                    if(!openshift.selector('bc', VAULT).exists()) {
+                        openshift.newBuild("--name=${VAULT}",
+                            '--binary=true',
+                            "--labels=app=${appName}")
+                    }
+
+                    dir('build/vault') {
+                        build = openshift.startBuild(VAULT,
+                            '--from-dir="."',
+                            '--wait=true').narrow('build').object()
+                     }
+                }
+
+                def namespace = build.status.config.namespace
+                def imageDigest = build.status.output.to.imageDigest
+                currentVaultBuildNo = "${build.metadata.annotations.get('openshift.io/build.number')}"
+
+                currentVaultImage = "${namespace}/${VAULT}@${imageDigest}"
+
+                echo "Build #${currentVaultBuildNo} created ${currentVaultImage}"
+            }
+        )
+    }
+}
+
+
+
+stage('Deploy Consul to Sandpit') {
+}
+
+stage('Deploy Vault to Sandpit') {
+}
+
+def createOrReplace(type, name, filePath) {
+    try {
+        if(!openshift.selector(type, name).exists()) {
+            openshift.create(readFile(file: filePath))
+        }
+        else {
+            openshift.replace(readFile(file: filePath))
+        }
+    }
+    catch(e) {
+        "Failed to create / update ${type}/${name} from ${filePath}: ${e}"
+    }
+}
+
+def download(url, file) {
+    sh "curl -sSL -o ${file} ${url}"
+}
+
+def consulDockerfile(baseImage, consulVersion, dumbInitVersion) {
+"""FROM ${baseImage}
+MAINTAINER Ric Featherstone <ricfeatherstone@users.noreply.github.com>
+
+ENV CONSUL_VERSION=${consulVersion} \\
+    DUMB_INIT_VERSION=${dumbInitVersion}
+
+LABEL io.k8s.description="" \\
+      io.k8s.display-name="" \\
+      io.openshift.expose-services="8443:http" \\
+      io.openshift.tags=""
+
+RUN groupadd consul -g 5000 && \\
+    useradd -g consul -r -M -u 1000 consul && \\
+    mkdir -p /consul/data && \\
+    mkdir -p /consul/config && \\
+    chown -R consul:consul /consul
+
+VOLUME /consul/data
+
+EXPOSE 8300 8301 8301/udp 8302 8302/udp 8443 8500 8600 8600/udp
+
+COPY dumb-init /usr/bin/dumb-init
+COPY consul /usr/bin/consul
+
+USER 1000
+
+ENTRYPOINT ["/usr/bin/dumb-init", "consul"]
+CMD ["agent", "-dev", "-client", "0.0.0.0"]
+"""
+}
+
+def vaultDockerfile(baseImage, vaultVersion, dumbInitVersion) {
+"""FROM ${baseImage}
+MAINTAINER Ric Featherstone <ricfeatherstone@users.noreply.github.com>
+
+ENV VAULT_VERSION=${vaultVersion} \\
+    DUMB_INIT_VERSION=${dumbInitVersion}
+
+LABEL io.k8s.description="" \\
+      io.k8s.display-name="" \\
+      io.openshift.expose-services="8443:http" \\
+      io.openshift.tags=""
+
+RUN groupadd vault -g 5000 && \
+    useradd -g vault -r -M -u 1000 vault && \
+    mkdir -p /vault/logs && \
+    mkdir -p /vault/file && \
+    mkdir -p /vault/config && \
+    chown -R vault:vault /vault
+
+VOLUME /vault/logs
+
+VOLUME /vault/file
+
+EXPOSE 8443
+
+COPY dumb-init /usr/bin/dumb-init
+COPY vault /usr/bin/vault
+
+USER 1000
+
+ENTRYPOINT ["/usr/bin/dumb-init", "vault"]
+CMD ["server", "-dev"]
+"""
+}

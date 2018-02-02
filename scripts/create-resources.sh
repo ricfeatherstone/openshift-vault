@@ -9,6 +9,14 @@ oc adm policy add-scc-to-user vault system:serviceaccount:$PROJECT:vault --as=sy
 
 oc new-project $PROJECT
 
+oc new-build https://github.com/ricfeatherstone/openshift-vault#feature/create-rhel-containers --context-dir=docker/centos/consul --name=consul
+oc set image-lookup consul
+
+oc new-build https://github.com/ricfeatherstone/openshift-vault#feature/create-rhel-containers --context-dir=docker/centos/vault --name=vault
+oc set image-lookup vault
+
+sleep 120
+
 #
 # Consul
 #

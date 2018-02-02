@@ -1,0 +1,98 @@
+def name = 'vault'
+def appName = 'vault'
+def buildDir = 'build'
+
+properties([
+    parameters([
+        string(name: 'baseImage', defaultValue: 'centos', description: 'The base image to build from'),
+        string(name: 'vaultVersion', defaultValue: '0.9.1', description: 'The version of Vault to use'),
+        string(name: 'dumbInitVersion', defaultValue: '1.2.1', description: 'The version of Dumb-init to use')
+    ])
+])
+
+node() {
+    stage('Clean Checkout') {
+        deleteDir()
+        checkout scm
+    }
+
+    stage('Prepare Build Artefacts') {
+        dir(buildDir) {
+            sh "curl -sSL -o dumb-init ${dumbInitUrl()}"
+            sh 'chmod +x dumb-init'
+
+            sh "curl -sSL -o vault.zip ${vaultUrl()}"
+            sh 'unzip vault.zip && rm vault.zip'
+
+            writeFile(file: 'Dockerfile', text: createDockerfile())
+        }
+    }
+
+    stage('Build Image') {
+        openshift.withCluster() {
+            namespace = openshift.project()
+
+            if(!openshift.selector('bc', name).exists()) {
+                openshift.newBuild("--name=${name}",
+                    "--to=${namespace}/${name}:latest",
+                    '--binary=true',
+                    "--labels=app=${appName}")
+            }
+
+            dir(buildDir) {
+                build = openshift.startBuild(name,
+                    '--from-dir="."',
+                    '--wait=true').narrow('build').object()
+
+                imageDigest = build.status.output.to.imageDigest
+                buildNumber = "${build.metadata.annotations.get('openshift.io/build.number')}"
+
+                echo "Build #${buildNumber} created ${namespace}/${name}@${imageDigest}"
+             }
+        }
+    }
+}
+
+def dumbInitUrl() {
+    "https://github.com/Yelp/dumb-init/releases/download/v${params.dumbInitVersion}/dumb-init_${params.dumbInitVersion}_amd64"
+}
+
+def vaultUrl() {
+    "https://releases.hashicorp.com/vault/${params.vaultVersion}/vault_${params.vaultVersion}_linux_amd64.zip"
+}
+
+def createDockerfile() {
+    """\
+FROM ${params.baseImage}
+MAINTAINER Ric Featherstone <ricfeatherstone@users.noreply.github.com>
+
+ENV VAULT_VERSION=${params.vaultVersion} \\
+    DUMB_INIT_VERSION=${params.dumbInitVersion}
+
+LABEL io.k8s.description="" \\
+      io.k8s.display-name="" \\
+      io.openshift.expose-services="8443:http" \\
+      io.openshift.tags=""
+
+RUN groupadd vault -g 5000 && \
+    useradd -g vault -r -M -u 1000 vault && \
+    mkdir -p /vault/logs && \
+    mkdir -p /vault/file && \
+    mkdir -p /vault/config && \
+    chown -R vault:vault /vault
+
+VOLUME /vault/logs
+
+VOLUME /vault/file
+
+EXPOSE 8443
+
+COPY dumb-init /usr/bin/dumb-init
+COPY vault /usr/bin/vault
+
+USER 1000
+
+ENTRYPOINT ["/usr/bin/dumb-init", "vault"]
+CMD ["server", "-dev"]
+"""
+}

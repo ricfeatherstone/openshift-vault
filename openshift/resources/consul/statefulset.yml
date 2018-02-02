@@ -21,12 +21,10 @@ spec:
                   name: consul
             weight: 100
       terminationGracePeriodSeconds: 10
-      securityContext:
-        fsGroup: 1000
       serviceAccountName: consul
       containers:
       - name: consul
-        image: "consul:0.9.1"
+        image: consul:latest
         env:
         - name: POD_IP
           valueFrom:
@@ -81,7 +79,7 @@ spec:
       volumes:
       - name: config
         configMap:
-          name: consul-server
+          name: consul
       - name: tls
         secret:
           secretName: consul
