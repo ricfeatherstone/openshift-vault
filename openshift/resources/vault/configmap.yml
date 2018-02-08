@@ -8,15 +8,15 @@ data:
       path          = "vault"
       address       = "127.0.0.1:8443"
       scheme        = "https"
-      tls_ca_file   = "/var/run/secrets/consul/certs/ca.pem"
-      tls_cert_file = "/var/run/secrets/consul/certs/consul-client.pem"
-      tls_key_file  = "/var/run/secrets/consul/certs/consul-client-key.pem"
+      tls_ca_file   = "/var/run/secrets/consul/ca.pem"
+      tls_cert_file = "/var/run/secrets/consul/consul-client.pem"
+      tls_key_file  = "/var/run/secrets/consul/consul-client-key.pem"
     }
 
     listener "tcp" {
       address                  = "0.0.0.0:8200"
-      tls_cert_file            = "/var/run/secrets/vault/certs/tls.crt"
-      tls_key_file             = "/var/run/secrets/vault/certs/tls.key"
+      tls_cert_file            = "/var/run/secrets/vault/tls.crt"
+      tls_key_file             = "/var/run/secrets/vault/tls.key"
       tls_disable_client_certs = true
     }
 

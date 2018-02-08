@@ -1,0 +1,157 @@
+
+def deploymentTarget = 'vault'
+
+node() {
+
+    stage('Clean Checkout') {
+        deleteDir()
+        checkout scm
+    }
+
+    stage('Download CFSSL') {
+        //TODO: Add to image
+        dir('bin') {
+            sh 'curl -sSL -o cfssl https://pkg.cfssl.org/R1.2/cfssl_linux-amd64'
+            sh 'curl -sSL -o cfssljson https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64'
+            sh 'curl -sSL -o consul.zip https://releases.hashicorp.com/consul/1.0.3/consul_1.0.3_linux_amd64.zip'
+            sh 'unzip consul.zip'
+            sh 'chmod +x cfssl cfssljson'
+        }
+    }
+
+    stage('Create Secrets') {
+        dir(deploymentTarget) {
+            openshift.withCluster() {
+                openshift.withProject(deploymentTarget) {
+                    if(!openshift.selector('secret', 'consul-gossip-encryption-key').exists()) {
+                        gossipEncryptionKey = sh(script: '../bin/consul keygen', returnStdout: true)
+                        openshift.raw('create', 'secret', 'generic', 'consul-gossip-encryption-key',
+                            "--from-literal='value=${gossipEncryptionKey}'"
+                        )
+                    }
+
+                    if(!openshift.selector('secret', 'consul-keys').exists()) {
+                        sh '../bin/cfssl gencert -initca ../cfssl/ca-csr.json | ../bin/cfssljson -bare ca'
+
+                        sh '''\
+                            ../bin/cfssl gencert \
+                            -ca=ca.pem \
+                            -ca-key=ca-key.pem \
+                            -config=../cfssl/ca-config.json \
+                            -profile=default \
+                            ../cfssl/consul-csr.json | ../bin/cfssljson -bare consul
+                        '''
+
+                        openshift.raw('create', 'secret', 'generic', 'consul-keys',
+                            '--from-file=ca.pem',
+                            '--from-file=consul.pem',
+                            '--from-file=consul-key.pem')
+                    }
+
+                    if(!openshift.selector('secret', 'consul-client-keys').exists()) {
+                        sh '''\
+                            ../bin/cfssl gencert \
+                            -ca=ca.pem \
+                            -ca-key=ca-key.pem \
+                            -config=../cfssl/ca-config.json \
+                            -profile=default \
+                            ../cfssl/consul-client-csr.json | ../bin/cfssljson -bare consul-client
+                        '''
+                        openshift.raw('create', 'secret', 'generic', 'consul-client-keys',
+                            '--from-file=ca.pem',
+                            '--from-file=consul-client.pem',
+                            '--from-file=consul-client-key.pem')
+                    }
+                }
+            }
+            deleteDir()
+        }
+    }
+
+    stage('Create / Update Static Resources') {
+        openshift.withCluster() {
+            openshift.withProject(deploymentTarget) {
+                for(resource in staticResources()) {
+                    process(resource)
+                }
+            }
+        }
+    }
+
+    stage('Deploy') {
+        openshift.withCluster() {
+            openshift.withProject(deploymentTarget) {
+                openshift.tag('vault-cicd/consul:latest', "${deploymentTarget}/consul:latest")
+
+                setImageLookupLocal('consul')
+                process(consulStatefulset())
+
+                timeout(5) {
+                    watchUntilReady('statefulset', 'consul', 3)
+                    echo 'consul ready!'
+                }
+
+                openshift.tag('vault-cicd/vault:latest', "${deploymentTarget}/vault:latest")
+
+                setImageLookupLocal('vault')
+                process(vaultDeployment())
+
+                timeout(5) {
+                    watchUntilReady('dc', 'vault', 2)
+                    echo 'vault ready!'
+                }
+            }
+        }
+    }
+}
+
+def watchUntilReady(type, name, readyNumber) {
+    openshift.selector(type, name).watch {
+        it.object().status.readyReplicas == readyNumber
+    }
+}
+
+def setImageLookupLocal(imageStream) {
+    try {
+        openshift.raw('set', 'image-lookup', imageStream)
+    }
+    catch(e) {
+        echo "Error setting image lookup local on ${imageStream}"
+    }
+}
+
+def process(resource) {
+    try {
+        if(openshift.selector(resource.type, resource.name).exists()) {
+            openshift.replace(readFile(file: resource.file))
+        }
+        else {
+            openshift.create(readFile(file: resource.file))
+        }
+    }
+    catch(e) {
+        "Failed to create / update ${resource}: ${e}"
+    }
+}
+
+def staticResources() {
+    [
+        [name: 'consul', type: 'sa', file: 'openshift/resources/consul/sa.yml'],
+        [name: 'consul', type: 'configmap', file: 'openshift/resources/consul/configmap.yml'],
+        [name: 'consul', type: 'is', file: 'openshift/resources/consul/is.yml'],
+        [name: 'consul', type: 'svc', file: 'openshift/resources/consul/svc.yml'],
+        [name: 'vault', type: 'sa', file: 'openshift/resources/vault/sa.yml'],
+        [name: 'vault', type: 'configmap', file: 'openshift/resources/vault/configmap.yml'],
+        [name: 'consul-client', type: 'configmap', file: 'openshift/resources/vault/configmap-consul-client.yml'],
+        [name: 'vault', type: 'svc', file: 'openshift/resources/vault/svc.yml'],
+        [name: 'vault', type: 'route', file: 'openshift/resources/vault/route.yml']
+    ]
+}
+
+def consulStatefulset() {
+    [name: 'consul', type: 'statefulset', file: 'openshift/resources/consul/statefulset.yml']
+}
+
+def vaultDeployment() {
+    [name: 'vault', type: 'dc', file: 'openshift/resources/vault/dc.yml']
+}

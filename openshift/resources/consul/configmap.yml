@@ -6,9 +6,9 @@ metadata:
 data:
   server.json: |
     {
-      "ca_file": "/var/run/secrets/consul/certs/ca.pem",
-      "cert_file": "/var/run/secrets/consul/certs/consul.pem",
-      "key_file": "/var/run/secrets/consul/certs/consul-key.pem",
+      "ca_file": "/var/run/secrets/consul/ca.pem",
+      "cert_file": "/var/run/secrets/consul/consul.pem",
+      "key_file": "/var/run/secrets/consul/consul-key.pem",
       "verify_incoming": true,
       "verify_outgoing": true,
       "verify_server_hostname": true,

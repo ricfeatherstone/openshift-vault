@@ -58,30 +58,26 @@ spec:
           - name: GOSSIP_ENCRYPTION_KEY
             valueFrom:
               secretKeyRef:
-                name: consul
-                key: gossip-encryption-key
-          - name: NAMESPACE
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.namespace
+                name: consul-gossip-encryption-key
+                key: value
           args:
           - "agent"
           - "-server=false"
           - "-bind=0.0.0.0"
           - "-advertise=$(POD_IP)"
           - "-client=127.0.0.1"
-          - "-retry-join=consul.$(NAMESPACE).svc.cluster.local"
+          - "-retry-join=consul"
           - "-config-file=/consul/config/client.json"
           - "-encrypt=$(GOSSIP_ENCRYPTION_KEY)"
           - "-data-dir=/consul/data"
           - "-disable-host-node-id"
           volumeMounts:
+          - name: consul-keys
+            mountPath: /var/run/secrets/consul
           - name: consul-config
             mountPath: /consul/config
           - name: consul-data
             mountPath: /consul/data
-          - name: consul-cert
-            mountPath: /var/run/secrets/consul/certs
           lifecycle:
             preStop:
               exec:
@@ -100,41 +96,47 @@ spec:
             capabilities:
               add:
               - IPC_LOCK
+          command:
           args:
           - server
           - "-config"
           - /vault/config
           volumeMounts:
-          - name: consul-cert
-            mountPath: /var/run/secrets/consul/certs
+          - name: consul-keys
+            mountPath: /var/run/secrets/consul
+          - name: vault-keys
+            mountPath: /var/run/secrets/vault
           - name: vault-config
             mountPath: /vault/config
-          - name: vault-cert
-            mountPath: /var/run/secrets/vault/certs
           ports:
           - containerPort: 8200
             name: https
           livenessProbe:
-            httpGet:
-              path: 'v1/sys/health?standbyok=true&standbycode=200&sealedcode=200&uninitcode=200'
-              port: 8200
-              scheme: HTTPS
+#            httpGet:
+#              path: 'v1/sys/health?standbyok=true&standbycode=200&sealedcode=200&uninitcode=200'
+#              port: 8200
+#              scheme: HTTPS
 #          readinessProbe:
 #            httpGet:
 #              path: 'v1/sys/health?standbyok=true&standbycode=200&sealedcode=200&uninitcode=200'
 #              port: 8200
       volumes:
+      - name: gossip-encryption-key
+        secret:
+          secretName: consul-gossip-encryption-key
+      - name: consul-keys
+        secret:
+          secretName: consul-client-keys
       - name: consul-config
         configMap:
           name: consul-client
       - name: consul-data
         emptyDir: {}
-      - name: consul-cert
+      - name: vault-keys
         secret:
-          secretName: consul-client
+          secretName: vault-cert
       - name: vault-config
         configMap:
           name: vault
-      - name: vault-cert
-        secret:
-          secretName: vault-cert
+
+
